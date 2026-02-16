@@ -1,4 +1,9 @@
-const API_BASE = "https://v6.db.transport.rest";
+const API_ENDPOINTS = [
+  "https://v6.db.transport.rest",
+  "https://v5.db.transport.rest"
+];
+const API_TIMEOUT_MS = 12000;
+const MAX_RETRIES_PER_ENDPOINT = 2;
 
 const DEFAULTS = {
   station: { id: "8011160", name: "Berlin Hbf" },
@@ -87,6 +92,25 @@ function saveSettings() {
   localStorage.setItem("departureBoardSettings", JSON.stringify(state));
 }
 
+function getStationCacheKey() {
+  return `departureCache:${state.station.id}`;
+}
+
+function setCachedDepartures(departures) {
+  localStorage.setItem(getStationCacheKey(), JSON.stringify({ timestamp: Date.now(), departures }));
+}
+
+function getCachedDepartures() {
+  const raw = localStorage.getItem(getStationCacheKey());
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?.departures || null;
+  } catch {
+    return null;
+  }
+}
+
 function setupUI() {
   renderColorControls();
   renderTypeControls();
@@ -104,7 +128,7 @@ function setupUI() {
   els.saveStationBtn.addEventListener("click", () => {
     const selected = els.stationSelect.selectedOptions[0];
     if (!selected) return;
-    state.station = { id: selected.value, name: selected.textContent };
+    state.station = { id: selected.value, name: selected.textContent || "Unbekannt" };
     setSelectedStationText();
     saveSettings();
     refreshBoard();
@@ -141,7 +165,8 @@ function renderColorControls() {
 function renderTypeControls() {
   els.typeConfig.innerHTML = "";
   TYPE_ORDER.forEach((type) => {
-    const values = state.types[type] || DEFAULTS.types.OTHER;
+    if (!state.types[type]) state.types[type] = { ...DEFAULTS.types[type] };
+    const values = state.types[type];
     const row = document.createElement("div");
     row.className = "type-row";
 
@@ -174,26 +199,62 @@ function renderTypeControls() {
   });
 }
 
+async function fetchJsonWithFallback(pathAndQuery) {
+  let lastError = "";
+
+  for (const baseUrl of API_ENDPOINTS) {
+    for (let attempt = 1; attempt <= MAX_RETRIES_PER_ENDPOINT; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+      try {
+        const response = await fetch(`${baseUrl}${pathAndQuery}`, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (response.ok) return await response.json();
+
+        if (response.status >= 500) {
+          lastError = `${baseUrl} antwortete mit ${response.status}`;
+          await wait(300 * attempt);
+          continue;
+        }
+
+        const bodyText = await response.text();
+        throw new Error(`${baseUrl} Fehler ${response.status}: ${bodyText.slice(0, 150)}`);
+      } catch (error) {
+        clearTimeout(timeout);
+        lastError = `${baseUrl} Versuch ${attempt}: ${error?.message || "Unbekannter Fehler"}`;
+        await wait(350 * attempt);
+      }
+    }
+  }
+
+  throw new Error(lastError || "Alle API-Endpunkte fehlgeschlagen");
+}
+
 async function searchStations(query) {
   const q = query.trim();
   if (q.length < 2) return;
-  try {
-    const url = `${API_BASE}/locations?query=${encodeURIComponent(q)}&poi=false&addresses=false&results=25&national=true`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error("API Fehler");
-    const locations = await response.json();
 
-    const germanStations = locations.filter((loc) => loc.location?.latitude && (!loc.address || loc.address?.countryCode === "DE"));
+  try {
+    const locations = await fetchJsonWithFallback(`/locations?query=${encodeURIComponent(q)}&poi=false&addresses=false&results=25&national=true`);
+    const stations = locations
+      .filter((loc) => loc?.id && loc?.name)
+      .filter((loc) => !loc.address || loc.address?.countryCode === "DE")
+      .filter((loc, idx, arr) => arr.findIndex((other) => other.id === loc.id) === idx);
+
     els.stationSelect.innerHTML = "";
 
-    germanStations.forEach((station) => {
+    stations.forEach((station) => {
       const opt = document.createElement("option");
       opt.value = station.id;
       opt.textContent = station.name;
       els.stationSelect.appendChild(opt);
     });
-  } catch {
-    els.selectedStation.textContent = "Bahnhofssuche fehlgeschlagen. API erreichbar?";
+
+    if (!stations.length) {
+      els.selectedStation.textContent = "Keine deutschen Bahnhöfe gefunden. Bitte Begriff präzisieren.";
+    }
+  } catch (error) {
+    els.selectedStation.textContent = `Bahnhofssuche fehlgeschlagen: ${error.message}`;
   }
 }
 
@@ -218,15 +279,42 @@ function updateHeaderClock() {
   els.boardTime.textContent = `Stand: ${new Date().toLocaleString("de-DE")}`;
 }
 
+async function resolveStationByNameFallback() {
+  try {
+    const locations = await fetchJsonWithFallback(`/locations?query=${encodeURIComponent(state.station.name)}&poi=false&addresses=false&results=5&national=true`);
+    const candidate = locations.find((entry) => entry?.id && entry?.name && entry.name.toLowerCase().includes(state.station.name.toLowerCase().slice(0, 4)));
+    if (candidate?.id && candidate.id !== state.station.id) {
+      state.station = { id: candidate.id, name: candidate.name };
+      saveSettings();
+      setSelectedStationText();
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 async function refreshBoard() {
   setSelectedStationText();
   try {
-    const response = await fetch(`${API_BASE}/stops/${state.station.id}/departures?duration=90&remarks=true&linesOfStops=false`);
-    if (!response.ok) throw new Error("Abfahrten konnten nicht geladen werden");
-    const departures = await response.json();
+    const departures = await fetchJsonWithFallback(`/stops/${state.station.id}/departures?duration=90&remarks=true&linesOfStops=false`);
+    setCachedDepartures(departures);
     renderBoard(departures.slice(0, 30));
-  } catch {
-    els.board.innerHTML = `<p class="hint">Keine Daten verfügbar. Prüfe Bahnhof/Netzwerk.</p>`;
+  } catch (error) {
+    const resolved = await resolveStationByNameFallback();
+    if (resolved) {
+      return refreshBoard();
+    }
+
+    const cached = getCachedDepartures();
+    if (cached?.length) {
+      renderBoard(cached.slice(0, 30));
+      els.board.insertAdjacentHTML("afterbegin", `<p class="hint">⚠️ Live-Daten derzeit nicht erreichbar (${escapeHtml(error.message)}). Zeige zuletzt bekannte Abfahrten.</p>`);
+      return;
+    }
+
+    els.board.innerHTML = `<p class="hint">Keine Daten verfügbar: ${escapeHtml(error.message)}</p>`;
   }
 }
 
@@ -239,8 +327,8 @@ function renderBoard(departures) {
 
   departures.forEach((dep) => {
     const card = els.cardTemplate.content.firstElementChild.cloneNode(true);
-    const scheduled = new Date(dep.plannedWhen || dep.when);
-    const effective = new Date(dep.when || dep.plannedWhen);
+    const scheduled = new Date(dep.plannedWhen || dep.when || Date.now());
+    const effective = new Date(dep.when || dep.plannedWhen || Date.now());
     const now = new Date();
     const type = classifyType(dep);
     const typeConfig = state.types[type] || state.types.OTHER;
@@ -260,11 +348,7 @@ function renderBoard(departures) {
     }
 
     const isSev = isSEV(dep);
-    card.querySelector(".platform").textContent = isSev
-      ? "🚌 SEV"
-      : dep.platform
-        ? `Gl. ${dep.platform}`
-        : "Kein Gleis";
+    card.querySelector(".platform").textContent = isSev ? "🚌 SEV" : dep.platform ? `Gl. ${dep.platform}` : "Kein Gleis";
 
     const led = card.querySelector(".led");
     const diffMs = now.getTime() - effective.getTime();
@@ -294,4 +378,17 @@ function classifyType(dep) {
 function isSEV(dep) {
   const txt = `${dep.line?.name || ""} ${dep.line?.productName || ""} ${(dep.remarks || []).map((r) => r.text || "").join(" ")}`.toUpperCase();
   return txt.includes("SEV") || txt.includes("ERSATZVERKEHR") || dep.line?.mode === "bus";
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
