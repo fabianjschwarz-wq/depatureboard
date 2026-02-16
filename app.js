@@ -97,7 +97,8 @@ function getStationCacheKey() {
 }
 
 function setCachedDepartures(departures) {
-  localStorage.setItem(getStationCacheKey(), JSON.stringify({ timestamp: Date.now(), departures }));
+  const safeDepartures = Array.isArray(departures) ? departures : [];
+  localStorage.setItem(getStationCacheKey(), JSON.stringify({ timestamp: Date.now(), departures: safeDepartures }));
 }
 
 function getCachedDepartures() {
@@ -235,7 +236,8 @@ async function searchStations(query) {
   if (q.length < 2) return;
 
   try {
-    const locations = await fetchJsonWithFallback(`/locations?query=${encodeURIComponent(q)}&poi=false&addresses=false&results=25&national=true`);
+    const locationsResponse = await fetchJsonWithFallback(`/locations?query=${encodeURIComponent(q)}&poi=false&addresses=false&results=25&national=true`);
+    const locations = normalizeApiArray(locationsResponse, "locations");
     const stations = locations
       .filter((loc) => loc?.id && loc?.name)
       .filter((loc) => !loc.address || loc.address?.countryCode === "DE")
@@ -281,7 +283,8 @@ function updateHeaderClock() {
 
 async function resolveStationByNameFallback() {
   try {
-    const locations = await fetchJsonWithFallback(`/locations?query=${encodeURIComponent(state.station.name)}&poi=false&addresses=false&results=5&national=true`);
+    const locationsResponse = await fetchJsonWithFallback(`/locations?query=${encodeURIComponent(state.station.name)}&poi=false&addresses=false&results=5&national=true`);
+    const locations = normalizeApiArray(locationsResponse, "locations");
     const candidate = locations.find((entry) => entry?.id && entry?.name && entry.name.toLowerCase().includes(state.station.name.toLowerCase().slice(0, 4)));
     if (candidate?.id && candidate.id !== state.station.id) {
       state.station = { id: candidate.id, name: candidate.name };
@@ -298,7 +301,8 @@ async function resolveStationByNameFallback() {
 async function refreshBoard() {
   setSelectedStationText();
   try {
-    const departures = await fetchJsonWithFallback(`/stops/${state.station.id}/departures?duration=90&remarks=true&linesOfStops=false`);
+    const departuresResponse = await fetchJsonWithFallback(`/stops/${state.station.id}/departures?duration=90&remarks=true&linesOfStops=false`);
+    const departures = normalizeApiArray(departuresResponse, "departures");
     setCachedDepartures(departures);
     renderBoard(departures.slice(0, 30));
   } catch (error) {
@@ -378,6 +382,16 @@ function classifyType(dep) {
 function isSEV(dep) {
   const txt = `${dep.line?.name || ""} ${dep.line?.productName || ""} ${(dep.remarks || []).map((r) => r.text || "").join(" ")}`.toUpperCase();
   return txt.includes("SEV") || txt.includes("ERSATZVERKEHR") || dep.line?.mode === "bus";
+}
+
+
+function normalizeApiArray(value, keyHint) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    const candidate = value[keyHint];
+    if (Array.isArray(candidate)) return candidate;
+  }
+  throw new Error(`Unerwartetes API-Format für ${keyHint}`);
 }
 
 function wait(ms) {
