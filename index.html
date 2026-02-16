@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Departure Board</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="settings">
+      <h1>Departure Board</h1>
+      <p class="subtitle">Style inspiriert von London Euston</p>
+
+      <section>
+        <h2>Bahnhof</h2>
+        <label for="stationQuery">Bahnhof suchen (DE)</label>
+        <div class="station-picker">
+          <input id="stationQuery" type="text" placeholder="z. B. Berlin Hbf" autocomplete="off" />
+          <button id="stationSearchBtn" type="button">Suchen</button>
+        </div>
+        <select id="stationSelect" size="6" aria-label="Bahnhofs-Auswahl"></select>
+        <button id="saveStationBtn" type="button">Bahnhof übernehmen</button>
+        <p id="selectedStation" class="hint"></p>
+      </section>
+
+      <section>
+        <h2>Allgemeine Farben</h2>
+        <div class="color-grid" id="globalColors"></div>
+      </section>
+
+      <section>
+        <h2>Zugtypen: Icon + Farbe</h2>
+        <div id="typeConfig" class="type-config"></div>
+      </section>
+
+      <section>
+        <h2>Anzeige</h2>
+        <label>Aktualisierung (Sekunden)
+          <input id="refreshSeconds" type="number" min="10" max="300" />
+        </label>
+        <button id="saveSettingsBtn" type="button">Einstellungen speichern</button>
+      </section>
+    </aside>
+
+    <main class="board-wrapper">
+      <header class="board-header">
+        <div>
+          <h2 id="boardStation">Kein Bahnhof gewählt</h2>
+          <p id="boardTime"></p>
+        </div>
+        <p class="board-info">3 Spalten · Echtzeit inkl. Verspätung · SEV-Kennzeichnung</p>
+      </header>
+
+      <section id="board" class="board" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <template id="cardTemplate">
+    <article class="departure-card">
+      <div class="top-row">
+        <div class="time-group">
+          <span class="led"></span>
+          <span class="time"></span>
+          <span class="delay"></span>
+        </div>
+        <span class="platform"></span>
+      </div>
+      <div class="line-row">
+        <span class="type-badge"></span>
+        <span class="line"></span>
+      </div>
+      <p class="destination"></p>
+      <p class="when"></p>
+    </article>
+  </template>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
