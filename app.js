@@ -8,6 +8,9 @@ const MAX_RETRIES_PER_ENDPOINT = 2;
 const DEFAULTS = {
   station: { id: "8011160", name: "Berlin Hbf" },
   refreshSeconds: 30,
+  boardColumns: 3,
+  boardRows: 10,
+  menuCollapsed: false,
   colors: {
     bg: "#0b0f16",
     panel: "#111827",
@@ -20,17 +23,18 @@ const DEFAULTS = {
     ledOff: "#334155"
   },
   types: {
-    ICE: { icon: "🚄", color: "#f97316" },
-    IC: { icon: "🚅", color: "#fb7185" },
-    EC: { icon: "🚅", color: "#fb7185" },
-    RE: { icon: "🚆", color: "#38bdf8" },
-    RB: { icon: "🚆", color: "#22d3ee" },
-    S: { icon: "Ⓢ", color: "#4ade80" },
-    U: { icon: "Ⓤ", color: "#a78bfa" },
-    STR: { icon: "🚋", color: "#facc15" },
-    BUS: { icon: "🚌", color: "#f59e0b" },
-    OTHER: { icon: "➡️", color: "#cbd5e1" }
-  }
+    ICE: { icon: "🚄", color: "#f97316", operator: "DB Fernverkehr" },
+    IC: { icon: "🚅", color: "#fb7185", operator: "DB Fernverkehr" },
+    EC: { icon: "🚅", color: "#fb7185", operator: "DB Fernverkehr" },
+    RE: { icon: "🚆", color: "#38bdf8", operator: "DB Regio" },
+    RB: { icon: "🚆", color: "#22d3ee", operator: "DB Regio" },
+    S: { icon: "Ⓢ", color: "#4ade80", operator: "S-Bahn" },
+    U: { icon: "Ⓤ", color: "#a78bfa", operator: "U-Bahn" },
+    STR: { icon: "🚋", color: "#facc15", operator: "Tram" },
+    BUS: { icon: "🚌", color: "#f59e0b", operator: "Bus" },
+    OTHER: { icon: "➡️", color: "#cbd5e1", operator: "Unbekannt" }
+  },
+  lineOverrides: []
 };
 
 const COLOR_LABELS = {
@@ -48,6 +52,10 @@ const COLOR_LABELS = {
 const TYPE_ORDER = ["ICE", "IC", "EC", "RE", "RB", "S", "U", "STR", "BUS", "OTHER"];
 const state = loadSettings();
 const els = {
+  appShell: document.querySelector("#appShell"),
+  settingsPanel: document.querySelector("#settingsPanel"),
+  settingsContent: document.querySelector("#settingsContent"),
+  toggleMenuBtn: document.querySelector("#toggleMenuBtn"),
   stationQuery: document.querySelector("#stationQuery"),
   stationSelect: document.querySelector("#stationSelect"),
   stationSearchBtn: document.querySelector("#stationSearchBtn"),
@@ -55,9 +63,14 @@ const els = {
   selectedStation: document.querySelector("#selectedStation"),
   globalColors: document.querySelector("#globalColors"),
   typeConfig: document.querySelector("#typeConfig"),
+  lineOverrides: document.querySelector("#lineOverrides"),
+  addOverrideBtn: document.querySelector("#addOverrideBtn"),
   refreshSeconds: document.querySelector("#refreshSeconds"),
+  boardColumns: document.querySelector("#boardColumns"),
+  boardRows: document.querySelector("#boardRows"),
   saveSettingsBtn: document.querySelector("#saveSettingsBtn"),
   boardStation: document.querySelector("#boardStation"),
+  boardInfo: document.querySelector("#boardInfo"),
   boardTime: document.querySelector("#boardTime"),
   board: document.querySelector("#board"),
   cardTemplate: document.querySelector("#cardTemplate")
@@ -67,6 +80,8 @@ let refreshHandle;
 
 setupUI();
 applyTheme();
+applyBoardLayout();
+applyMenuState();
 updateHeaderClock();
 refreshBoard();
 setupAutoRefresh();
@@ -81,11 +96,23 @@ function loadSettings() {
       ...structuredClone(DEFAULTS),
       ...parsed,
       colors: { ...DEFAULTS.colors, ...parsed.colors },
-      types: { ...DEFAULTS.types, ...parsed.types }
+      types: mergeTypeSettings(parsed.types),
+      lineOverrides: Array.isArray(parsed.lineOverrides) ? parsed.lineOverrides : []
     };
   } catch {
     return structuredClone(DEFAULTS);
   }
+}
+
+function mergeTypeSettings(savedTypes) {
+  const merged = {};
+  TYPE_ORDER.forEach((type) => {
+    merged[type] = {
+      ...DEFAULTS.types[type],
+      ...(savedTypes?.[type] || {})
+    };
+  });
+  return merged;
 }
 
 function saveSettings() {
@@ -115,8 +142,27 @@ function getCachedDepartures() {
 function setupUI() {
   renderColorControls();
   renderTypeControls();
+  renderOverrideControls();
   els.refreshSeconds.value = state.refreshSeconds;
+  els.boardColumns.value = state.boardColumns;
+  els.boardRows.value = state.boardRows;
   setSelectedStationText();
+
+  els.toggleMenuBtn.addEventListener("click", () => {
+    state.menuCollapsed = !state.menuCollapsed;
+    applyMenuState();
+    saveSettings();
+  });
+
+  els.addOverrideBtn.addEventListener("click", () => {
+    state.lineOverrides.push({
+      matcher: "",
+      logo: "",
+      color: "#cbd5e1",
+      operator: ""
+    });
+    renderOverrideControls();
+  });
 
   els.stationSearchBtn.addEventListener("click", () => searchStations(els.stationQuery.value));
   els.stationQuery.addEventListener("keydown", (event) => {
@@ -136,8 +182,11 @@ function setupUI() {
   });
 
   els.saveSettingsBtn.addEventListener("click", () => {
-    state.refreshSeconds = Number(els.refreshSeconds.value) || 30;
+    state.refreshSeconds = clampNumber(els.refreshSeconds.value, 10, 300, 30);
+    state.boardColumns = clampNumber(els.boardColumns.value, 1, 6, 3);
+    state.boardRows = clampNumber(els.boardRows.value, 1, 20, 10);
     applyTheme();
+    applyBoardLayout();
     saveSettings();
     setupAutoRefresh();
     refreshBoard();
@@ -166,8 +215,7 @@ function renderColorControls() {
 function renderTypeControls() {
   els.typeConfig.innerHTML = "";
   TYPE_ORDER.forEach((type) => {
-    if (!state.types[type]) state.types[type] = { ...DEFAULTS.types[type] };
-    const values = state.types[type];
+    const values = state.types[type] || { ...DEFAULTS.types[type] };
     const row = document.createElement("div");
     row.className = "type-row";
 
@@ -175,10 +223,10 @@ function renderTypeControls() {
     name.innerHTML = `<strong>${type}</strong><small>Typ</small>`;
 
     const iconLabel = document.createElement("label");
-    iconLabel.textContent = "Icon";
+    iconLabel.textContent = "Logo/Icon";
     const iconInput = document.createElement("input");
     iconInput.type = "text";
-    iconInput.maxLength = 4;
+    iconInput.maxLength = 12;
     iconInput.value = values.icon;
     iconInput.addEventListener("input", () => {
       state.types[type].icon = iconInput.value || DEFAULTS.types[type]?.icon || "➡️";
@@ -186,7 +234,7 @@ function renderTypeControls() {
     iconLabel.appendChild(iconInput);
 
     const colorLabel = document.createElement("label");
-    colorLabel.textContent = "Farbe";
+    colorLabel.textContent = "Badge-Farbe";
     const colorInput = document.createElement("input");
     colorInput.type = "color";
     colorInput.value = values.color;
@@ -195,8 +243,83 @@ function renderTypeControls() {
     });
     colorLabel.appendChild(colorInput);
 
-    row.append(name, iconLabel, colorLabel);
+    const operatorLabel = document.createElement("label");
+    operatorLabel.textContent = "Betreiber";
+    const operatorInput = document.createElement("input");
+    operatorInput.type = "text";
+    operatorInput.value = values.operator || "";
+    operatorInput.placeholder = "z. B. DB Regio";
+    operatorInput.addEventListener("input", () => {
+      state.types[type].operator = operatorInput.value;
+    });
+    operatorLabel.appendChild(operatorInput);
+
+    row.append(name, iconLabel, colorLabel, operatorLabel);
     els.typeConfig.appendChild(row);
+  });
+}
+
+function renderOverrideControls() {
+  els.lineOverrides.innerHTML = "";
+  state.lineOverrides.forEach((entry, index) => {
+    const row = document.createElement("div");
+    row.className = "override-row";
+
+    const matcherLabel = document.createElement("label");
+    matcherLabel.textContent = "Linie enthält";
+    const matcherInput = document.createElement("input");
+    matcherInput.type = "text";
+    matcherInput.placeholder = "z. B. RE1";
+    matcherInput.value = entry.matcher || "";
+    matcherInput.addEventListener("input", () => {
+      state.lineOverrides[index].matcher = matcherInput.value;
+    });
+    matcherLabel.appendChild(matcherInput);
+
+    const logoLabel = document.createElement("label");
+    logoLabel.textContent = "Logo/Icon";
+    const logoInput = document.createElement("input");
+    logoInput.type = "text";
+    logoInput.maxLength = 18;
+    logoInput.value = entry.logo || "";
+    logoInput.placeholder = "z. B. 🚆 oder ODEG";
+    logoInput.addEventListener("input", () => {
+      state.lineOverrides[index].logo = logoInput.value;
+    });
+    logoLabel.appendChild(logoInput);
+
+    const colorLabel = document.createElement("label");
+    colorLabel.textContent = "Farbe";
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = validColor(entry.color) ? entry.color : "#cbd5e1";
+    colorInput.addEventListener("input", () => {
+      state.lineOverrides[index].color = colorInput.value;
+    });
+    colorLabel.appendChild(colorInput);
+
+    const operatorLabel = document.createElement("label");
+    operatorLabel.textContent = "Betreiber";
+    const operatorInput = document.createElement("input");
+    operatorInput.type = "text";
+    operatorInput.placeholder = "z. B. ODEG";
+    operatorInput.value = entry.operator || "";
+    operatorInput.addEventListener("input", () => {
+      state.lineOverrides[index].operator = operatorInput.value;
+    });
+    operatorLabel.appendChild(operatorInput);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "delete-override";
+    deleteBtn.textContent = "✕";
+    deleteBtn.addEventListener("click", () => {
+      state.lineOverrides.splice(index, 1);
+      renderOverrideControls();
+    });
+
+    row.append(matcherLabel, logoLabel, colorLabel, operatorLabel, deleteBtn);
+    els.lineOverrides.appendChild(row);
   });
 }
 
@@ -277,6 +400,19 @@ function applyTheme() {
   });
 }
 
+function applyBoardLayout() {
+  const root = document.documentElement;
+  root.style.setProperty("--board-columns", String(state.boardColumns));
+  els.boardInfo.textContent = `${state.boardColumns} Spalten · ${state.boardRows} Zeilen · Echtzeit inkl. Verspätung`;
+}
+
+function applyMenuState() {
+  els.appShell.classList.toggle("menu-collapsed", Boolean(state.menuCollapsed));
+  els.toggleMenuBtn.textContent = state.menuCollapsed ? "⟩" : "⟨";
+  els.toggleMenuBtn.setAttribute("aria-expanded", String(!state.menuCollapsed));
+  els.toggleMenuBtn.title = state.menuCollapsed ? "Menü ausklappen" : "Menü einklappen";
+}
+
 function updateHeaderClock() {
   els.boardTime.textContent = `Stand: ${new Date().toLocaleString("de-DE")}`;
 }
@@ -300,11 +436,12 @@ async function resolveStationByNameFallback() {
 
 async function refreshBoard() {
   setSelectedStationText();
+  const limit = state.boardColumns * state.boardRows;
   try {
-    const departuresResponse = await fetchJsonWithFallback(`/stops/${state.station.id}/departures?duration=90&remarks=true&linesOfStops=false`);
+    const departuresResponse = await fetchJsonWithFallback(`/stops/${state.station.id}/departures?duration=90&remarks=true&linesOfStops=true`);
     const departures = normalizeApiArray(departuresResponse, "departures");
     setCachedDepartures(departures);
-    renderBoard(departures.slice(0, 30));
+    renderBoard(departures.slice(0, limit));
   } catch (error) {
     const resolved = await resolveStationByNameFallback();
     if (resolved) {
@@ -313,7 +450,7 @@ async function refreshBoard() {
 
     const cached = getCachedDepartures();
     if (cached?.length) {
-      renderBoard(cached.slice(0, 30));
+      renderBoard(cached.slice(0, limit));
       els.board.insertAdjacentHTML("afterbegin", `<p class="hint">⚠️ Live-Daten derzeit nicht erreichbar (${escapeHtml(error.message)}). Zeige zuletzt bekannte Abfahrten.</p>`);
       return;
     }
@@ -336,16 +473,23 @@ function renderBoard(departures) {
     const now = new Date();
     const type = classifyType(dep);
     const typeConfig = state.types[type] || state.types.OTHER;
+    const lineName = dep.line?.name || dep.line?.fahrtNr || "Unbekannt";
+    const override = getLineOverride(lineName);
     const delayMin = dep.delay ? Math.round(dep.delay / 60) : 0;
+    const badgeColor = override?.color || typeConfig.color;
+    const logo = override?.logo || typeConfig.icon;
+    const operator = override?.operator || dep.line?.operator?.name || typeConfig.operator || "";
 
     card.querySelector(".time").textContent = effective.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-    card.querySelector(".line").textContent = dep.line?.name || dep.line?.fahrtNr || "Unbekannt";
     card.querySelector(".destination").textContent = dep.direction || "Ohne Ziel";
     card.querySelector(".when").textContent = `Plan: ${scheduled.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}`;
 
+    const stops = extractImportantStops(dep);
+    card.querySelector(".stops").textContent = stops.length ? `Zwischenhalte: ${stops.join(" · ")}` : "Zwischenhalte: n/a";
+
     const badge = card.querySelector(".type-badge");
-    badge.textContent = `${typeConfig.icon} ${type}`;
-    badge.style.background = typeConfig.color;
+    badge.textContent = `${logo} ${lineName}${operator ? ` · ${operator}` : ""}`;
+    badge.style.background = badgeColor;
 
     if (delayMin > 0) {
       card.querySelector(".delay").textContent = `+${delayMin} min`;
@@ -379,11 +523,47 @@ function classifyType(dep) {
   return "OTHER";
 }
 
+function getLineOverride(lineName) {
+  const normalizedName = String(lineName || "").toLowerCase();
+  return state.lineOverrides.find((entry) => {
+    const matcher = String(entry.matcher || "").trim().toLowerCase();
+    return matcher && normalizedName.includes(matcher);
+  });
+}
+
+function extractImportantStops(dep) {
+  const candidates = [];
+  if (Array.isArray(dep.line?.stopovers)) {
+    dep.line.stopovers.forEach((stop) => {
+      const name = stop?.stop?.name;
+      if (name) candidates.push(name);
+    });
+  }
+  if (!candidates.length && Array.isArray(dep.remarks)) {
+    dep.remarks.forEach((remark) => {
+      const txt = remark?.text || "";
+      const match = txt.match(/(?:über|via)\s+(.+)/i);
+      if (match?.[1]) {
+        match[1].split(/,|;|\//).forEach((value) => {
+          const trimmed = value.trim();
+          if (trimmed) candidates.push(trimmed);
+        });
+      }
+    });
+  }
+
+  const unique = [];
+  for (const stop of candidates) {
+    if (!unique.includes(stop) && stop !== dep.direction) unique.push(stop);
+    if (unique.length >= 4) break;
+  }
+  return unique;
+}
+
 function isSEV(dep) {
   const txt = `${dep.line?.name || ""} ${dep.line?.productName || ""} ${(dep.remarks || []).map((r) => r.text || "").join(" ")}`.toUpperCase();
   return txt.includes("SEV") || txt.includes("ERSATZVERKEHR") || dep.line?.mode === "bus";
 }
-
 
 function normalizeApiArray(value, keyHint) {
   if (Array.isArray(value)) return value;
@@ -392,6 +572,16 @@ function normalizeApiArray(value, keyHint) {
     if (Array.isArray(candidate)) return candidate;
   }
   throw new Error(`Unerwartetes API-Format für ${keyHint}`);
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(number)));
+}
+
+function validColor(value) {
+  return typeof value === "string" && /^#[0-9A-F]{6}$/i.test(value);
 }
 
 function wait(ms) {

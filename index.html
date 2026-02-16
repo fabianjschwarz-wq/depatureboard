@@ -7,40 +7,62 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="settings">
-      <h1>Departure Board</h1>
-      <p class="subtitle">Style inspiriert von London Euston</p>
-
-      <section>
-        <h2>Bahnhof</h2>
-        <label for="stationQuery">Bahnhof suchen (DE)</label>
-        <div class="station-picker">
-          <input id="stationQuery" type="text" placeholder="z. B. Berlin Hbf" autocomplete="off" />
-          <button id="stationSearchBtn" type="button">Suchen</button>
+  <div class="app-shell" id="appShell">
+    <aside class="settings" id="settingsPanel">
+      <div class="settings-head">
+        <div>
+          <h1>Departure Board</h1>
+          <p class="subtitle">Style inspiriert von London Euston</p>
         </div>
-        <select id="stationSelect" size="6" aria-label="Bahnhofs-Auswahl"></select>
-        <button id="saveStationBtn" type="button">Bahnhof übernehmen</button>
-        <p id="selectedStation" class="hint"></p>
-      </section>
+        <button id="toggleMenuBtn" type="button" class="collapse-btn" aria-expanded="true" title="Menü einklappen">⟨</button>
+      </div>
 
-      <section>
-        <h2>Allgemeine Farben</h2>
-        <div class="color-grid" id="globalColors"></div>
-      </section>
+      <div id="settingsContent" class="settings-content">
+        <section>
+          <h2>Bahnhof</h2>
+          <label for="stationQuery">Bahnhof suchen (DE)</label>
+          <div class="station-picker">
+            <input id="stationQuery" type="text" placeholder="z. B. Berlin Hbf" autocomplete="off" />
+            <button id="stationSearchBtn" type="button">Suchen</button>
+          </div>
+          <select id="stationSelect" size="6" aria-label="Bahnhofs-Auswahl"></select>
+          <button id="saveStationBtn" type="button">Bahnhof übernehmen</button>
+          <p id="selectedStation" class="hint"></p>
+        </section>
 
-      <section>
-        <h2>Zugtypen: Icon + Farbe</h2>
-        <div id="typeConfig" class="type-config"></div>
-      </section>
+        <section>
+          <h2>Allgemeine Farben</h2>
+          <div class="color-grid" id="globalColors"></div>
+        </section>
 
-      <section>
-        <h2>Anzeige</h2>
-        <label>Aktualisierung (Sekunden)
-          <input id="refreshSeconds" type="number" min="10" max="300" />
-        </label>
-        <button id="saveSettingsBtn" type="button">Einstellungen speichern</button>
-      </section>
+        <section>
+          <h2>Zugtypen: Badge + Betreiber</h2>
+          <div id="typeConfig" class="type-config"></div>
+        </section>
+
+        <section>
+          <h2>Linien-Overrides</h2>
+          <p class="hint">Optional: Überschreibt Badge/Betreiber, wenn der Linienname den Suchtext enthält.</p>
+          <div id="lineOverrides" class="line-overrides"></div>
+          <button id="addOverrideBtn" type="button">Override hinzufügen</button>
+        </section>
+
+        <section>
+          <h2>Anzeige</h2>
+          <label>Aktualisierung (Sekunden)
+            <input id="refreshSeconds" type="number" min="10" max="300" />
+          </label>
+          <div class="layout-grid">
+            <label>Spalten
+              <input id="boardColumns" type="number" min="1" max="6" />
+            </label>
+            <label>Zeilen
+              <input id="boardRows" type="number" min="1" max="20" />
+            </label>
+          </div>
+          <button id="saveSettingsBtn" type="button">Einstellungen speichern</button>
+        </section>
+      </div>
     </aside>
 
     <main class="board-wrapper">
@@ -49,7 +71,7 @@
           <h2 id="boardStation">Kein Bahnhof gewählt</h2>
           <p id="boardTime"></p>
         </div>
-        <p class="board-info">3 Spalten · Echtzeit inkl. Verspätung · SEV-Kennzeichnung</p>
+        <p class="board-info" id="boardInfo"></p>
       </header>
 
       <section id="board" class="board" aria-live="polite"></section>
@@ -68,9 +90,9 @@
       </div>
       <div class="line-row">
         <span class="type-badge"></span>
-        <span class="line"></span>
       </div>
       <p class="destination"></p>
+      <p class="stops"></p>
       <p class="when"></p>
     </article>
   </template>
